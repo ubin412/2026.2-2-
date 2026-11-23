@@ -609,6 +609,15 @@ st.markdown('''<style>
 .stApp h2 {font-size:34px;}
 .stApp h3 {font-size:30px;}
 .stApp h4 {font-size:26px;}
+.stApp .question-heading {
+    display:grid; grid-template-columns:max-content minmax(0,1fr);
+    gap:0.25em 0.65em; align-items:baseline; margin:0;
+    line-height:1.4; font-weight:700; letter-spacing:normal;
+}
+.question-heading .question-stem {font-size:0.82em; font-weight:inherit; overflow-wrap:anywhere;}
+@media (max-width:600px) {
+    .stApp .question-heading {grid-template-columns:minmax(0,1fr);}
+}
 .block-container {max-width:1260px; padding-top:2.6rem; padding-bottom:4rem;}
 [data-testid="stSidebar"] {background:#eaf0f3;}
 h1,h2,h3 {letter-spacing:-.035em;}
@@ -847,28 +856,29 @@ def render_result(result):
     for note in result['format_notes']:
         st.caption('작성 형식 · '+note)
 
-def plain_prompt(text):
-    st.markdown(f"<p>{escape(text).replace('~', '&#126;')}</p>", unsafe_allow_html=True)
+def render_question_heading(item_id, level):
+    prompt = {
+        '2-1': Q21_PROMPT, '3': Q3_PROMPT, '5-1': Q51_PROMPT,
+        '5-3': Q53_PROMPT.removeprefix('5-3. '),
+    }.get(item_id, ITEMS[item_id].prompt)
+    stem = escape(prompt).replace('~', '&#126;')
+    number = escape(item_title(item_id))
+    st.markdown(
+        f'<h{level} class="question-heading"><span>{number}</span>'
+        f'<span class="question-stem">{stem}</span></h{level}>',
+        unsafe_allow_html=True,
+    )
 
-def show_prompt(item_id):
-    question = ITEMS[item_id]
+def render_question_context(item_id):
     if item_id == '2-1':
-        plain_prompt(Q21_PROMPT)
         st.info('읽기 목적 · '+READING_PURPOSE)
         for mark, part in zip(MARKS[item_id], GROUPS[item_id]):
             st.write(f'{mark} {QUESTIONS[part].prompt}')
     elif item_id == '3':
-        plain_prompt(Q3_PROMPT)
         for mark, part in zip(MARKS[item_id], GROUPS[item_id]):
             st.write(f'{mark} {QUESTIONS[part].context}')
-    elif item_id == '5-1':
-        st.write(Q51_PROMPT)
-    elif item_id == '5-3':
-        st.write(Q53_PROMPT)
-    else:
-        st.write(question.prompt)
-        if question.context:
-            st.markdown(question.context)
+    elif ITEMS[item_id].context:
+        st.markdown(ITEMS[item_id].context)
 
 def placeholder_for(item_id):
     if item_id in MARKS:
@@ -878,20 +888,20 @@ def placeholder_for(item_id):
 tabs = st.tabs([*SECTIONS.values(), '📘 복습 노트'])
 for section, tab in zip(SECTIONS, tabs):
     with tab:
-        st.subheader(SECTIONS[section])
+        if section in ('2','5'):
+            st.subheader(SECTIONS[section])
         if section == '4':
             st.caption('광문의 두 발언은 수업 자료를 참고하세요.')
-        if section == '5':
-            with st.expander('5번 〈보기〉 펼쳐 보기', expanded=True):
-                st.markdown(Q5_CONTEXT)
         section_items = [item_id for item_id,q in ITEMS.items() if q.section == section]
         summary = st.empty()
         for item_id in section_items:
             q = ITEMS[item_id]
+            render_question_heading(item_id, 2 if section in ('1','3','4') else 4)
+            if item_id == '5-1':
+                with st.expander('5번 〈보기〉 펼쳐 보기', expanded=True):
+                    st.markdown(Q5_CONTEXT)
             with st.container(border=True):
-                if item_id not in ('1','3','4'):
-                    st.markdown('#### '+item_title(item_id))
-                show_prompt(item_id)
+                render_question_context(item_id)
                 if item_id in MARKS:
                     st.caption('한 답안란에서 항목 앞에 아래 예시처럼 구분 표시를 붙여 주세요.')
                 widget_key = 'input_'+item_id
@@ -936,10 +946,11 @@ with tabs[-1]:
         solved = retry is not None and retry['earned'] == retry['max_score']
         label = '다시 풀기 완료' if solved else '다시 풀기'
         with st.expander(f'{item_title(item_id)} · {label}', expanded=not solved):
+            render_question_heading(item_id, 4)
             if ITEMS[item_id].section == '5':
                 with st.expander('5번 〈보기〉'):
                     st.markdown(Q5_CONTEXT)
-            show_prompt(item_id)
+            render_question_context(item_id)
             st.markdown('**이전 답안**')
             st.text(entry['original']['answer'])
             render_result(entry['original'])
