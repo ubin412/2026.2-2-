@@ -10,7 +10,7 @@ from __future__ import annotations
 # ---------- questions.py ----------
 from dataclasses import dataclass, field, asdict
 
-RUBRIC_VERSION = '2026-11-23.2'
+RUBRIC_VERSION = '2026-11-23.3'
 
 @dataclass(frozen=True)
 class Criterion:
@@ -588,7 +588,17 @@ import streamlit as st
 
 st.set_page_config(page_title='유빈샘의 서논술형 연습실',page_icon='✍️',layout='wide')
 st.markdown('''<style>
+@font-face {
+    font-family: "LeeSeoyun";
+    src: url("https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2202-2@1.0/LeeSeoyun.woff") format("woff");
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+}
 .stApp {background:#fff; color:#25252b;}
+.stApp, .stApp :is(h1,h2,h3,h4,h5,h6,p,li,th,td,label,button,input,textarea,pre,[role="tab"],.practice-note,.grade-row) {
+    font-family: "LeeSeoyun", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif !important;
+}
 .block-container {max-width:1260px; padding-top:2.6rem; padding-bottom:4rem;}
 [data-testid="stSidebar"] {background:#eaf0f3;}
 h1,h2,h3 {letter-spacing:-.035em;}
@@ -620,10 +630,108 @@ def setting(key,default=''):
 def flag(key,default=True):
     return setting(key,str(default)).lower() in ('true','1','yes')
 
+# Keep the existing per-part rubrics while presenting one answer box per numbered item.
+GROUPS = {
+    '2-1': ('2-1-a','2-1-b','2-1-c'),
+    '3': ('3-a','3-b','3-c','3-d'),
+    '5-1': ('5-1-a','5-1-b'),
+    '5-3': ('5-3-a','5-3-b','5-3-c'),
+}
+MARKS = {
+    '2-1': ('㉠','㉡','㉢'),
+    '3': ('㉠','㉡','㉢','㉣'),
+    '5-1': ('어엿비','얼굴'),
+    '5-3': ('니러나다','됴타','믈'),
+}
+group_for_part = {part: group for group, parts in GROUPS.items() for part in parts}
+ITEMS = {}
+for question in QUESTIONS.values():
+    item_id = group_for_part.get(question.id, question.id)
+    ITEMS.setdefault(item_id, question)
+
+def item_title(item_id):
+    return {'1':'서논술형 1번','3':'서논술형 3번','4':'서논술형 4번'}.get(item_id,item_id)
+
+def draft_for(item_id):
+    drafts = st.session_state.drafts
+    if item_id in drafts:
+        return drafts[item_id]
+    parts = GROUPS.get(item_id, ())
+    return '\n'.join(f'{mark}: {drafts[part]}' for mark, part in zip(MARKS.get(item_id, ()), parts)
+                     if drafts.get(part, '').strip())
+
+def split_answer(item_id, answer):
+    marks = MARKS[item_id]
+    alternatives = '|'.join(map(re.escape, marks))
+    if marks[0] == '㉠':
+        pattern = rf'(?:{alternatives})\s*[:：.)]?\s*|(?m:^\s*([ㄱ-ㄹ1-4])[:：.)]\s*)'
+    else:
+        pattern = rf'(?:^|(?<=\n)|(?<=\s)|(?<=[.!?]))[‘“"\']?({alternatives})[’”"\']?\s*(?:[:：.)]\s*|(?=은|는|의))'
+    matches = list(re.finditer(pattern, answer))
+    if matches:
+        chunks = {}
+        for index, match in enumerate(matches):
+            marker = match.group(1) or match.group().strip()[0]
+            if marker in 'ㄱㄴㄷㄹ1234':
+                marker = '㉠㉡㉢㉣'['ㄱㄴㄷㄹ'.index(marker) if marker in 'ㄱㄴㄷㄹ' else int(marker)-1]
+            end = matches[index+1].start() if index+1 < len(matches) else len(answer)
+            body = answer[match.end():end].strip()
+            if marks[0] != '㉠':
+                body = answer[match.start():end].strip() if match.group()[-1:] not in (' ', '\t') and not re.search(r'[:：.)]', match.group()) else body
+            chunks[marker] = (chunks.get(marker, '') + ' ' + body).strip()
+        return [chunks.get(mark,'') for mark in marks]
+    lines = [line.strip() for line in answer.splitlines() if line.strip()]
+    return lines if len(lines) == len(marks) else None
+
+def assess_item(item_id, answer):
+    grouped = item_id in GROUPS
+    parts = GROUPS.get(item_id, (item_id,))
+    answers = split_answer(item_id, answer) if grouped else [answer]
+    rows, notes = [], []
+    for index, part in enumerate(parts):
+        question = QUESTIONS[part]
+        prefix = f'{MARKS[item_id][index]} · ' if grouped else ''
+        subanswer = answers[index] if answers is not None else ''
+        if subanswer.strip():
+            result = None
+            if use_ai:
+                try:
+                    result = grade(question, subanswer, OpenAIBackend(key,model))
+                except GradingError as exc:
+                    notes.append(str(exc) + ' 기본 채점 결과를 표시합니다.')
+            if result is None:
+                result = grade_local(question, subanswer)
+            notes.extend(result['format_notes'])
+            for criterion, row in zip(question.criteria, result['checks']):
+                rows.append(dict(row, label=prefix+row['label'], required=criterion.required))
+        else:
+            ambiguous = answers is None
+            for criterion in question.criteria:
+                rows.append(dict(label=prefix+criterion.label, points=criterion.points,
+                                 status='review' if ambiguous else 'missing', evidence=[],
+                                 required=criterion.required, feedback='답안 앞에 구분 기호를 붙이거나 항목별로 한 줄씩 써 주세요.' if ambiguous else '이 항목의 답안이 비어 있어요.'))
+    return dict(answer=answer, checks=rows, format_notes=list(dict.fromkeys(notes)),
+                earned=sum(row['points'] for row in rows if row['status']=='pass'),
+                pending=sum(row['points'] for row in rows if row['status']=='review'),
+                max_score=sum(row['points'] for row in rows))
+
+def show_examples(item_id):
+    if not flag('SHOW_MODEL_ANSWERS',True):
+        return
+    with st.expander('모범답안과 비교하기'):
+        for index, part in enumerate(GROUPS.get(item_id, (item_id,))):
+            for label, example in QUESTIONS[part].examples:
+                heading = f'{MARKS[item_id][index]} · {label}' if item_id in GROUPS else label
+                st.markdown(f'**{heading}**')
+                st.write(example)
+
 if 'drafts' not in st.session_state:
     st.session_state.drafts={}
     st.session_state.results={}
     st.session_state.attempted=set()
+
+if 'review_note' not in st.session_state:
+    st.session_state.review_note={}
 
 def remember(qid):
     st.session_state.drafts[qid]=st.session_state['input_'+qid]
@@ -638,12 +746,12 @@ def export_data():
 
 def export_text():
     parts=['유빈샘의 서논술형 답안 연습','2차 정기시험 대비','']
-    for q in QUESTIONS.values():
-        answer=st.session_state.drafts.get(q.id,'')
+    for item_id, q in ITEMS.items():
+        answer=draft_for(item_id)
         if not answer.strip():
             continue
-        parts.extend([q.label,answer])
-        result=current_result(q.id)
+        parts.extend([item_title(item_id),answer])
+        result=current_result(item_id)
         if result:
             parts.append(f"연습 채점: 확인된 점수 {result['earned']:g}/{result['max_score']:g}, 확인 필요 {result['pending']:g}점")
         elif not q.graded:
@@ -661,10 +769,10 @@ with st.sidebar:
     use_ai = st.checkbox('AI 의미 채점 사용', value=False) if available else False
     if use_ai:
         st.caption('채점을 누르면 답안이 AI 서비스로 전송됩니다. 이름과 학번은 입력하지 마세요.')
-    done=sum(bool(st.session_state.drafts.get(q.id,'').strip()) for q in QUESTIONS.values())
+    done=sum(bool(draft_for(item_id).strip()) for item_id in ITEMS)
     st.divider()
-    st.caption(f'답안을 쓴 칸 {done} / {len(QUESTIONS)}')
-    st.progress(done/len(QUESTIONS))
+    st.caption(f'답안을 쓴 칸 {done} / {len(ITEMS)}')
+    st.progress(done/len(ITEMS))
     st.caption('다른 문항으로 이동해도 답안이 유지됩니다. 새로고침하거나 창을 닫기 전에는 내려받아 주세요.')
     with st.expander('내 답안 내려받기 / 이어 쓰기'):
         st.download_button('답안 TXT 내려받기',export_text(),file_name='내_서논술형_답안.txt',mime='text/plain')
@@ -679,20 +787,35 @@ with st.sidebar:
                 if data.get('format')!='korean-writing-practice-v1' or not isinstance(data.get('answers'),dict):
                     raise ValueError()
                 imported=data['answers']
-                if any(k not in QUESTIONS or not isinstance(v,str) or len(v)>MAX_ANSWER_LENGTH for k,v in imported.items()):
+                if any(k not in QUESTIONS and k not in ITEMS or not isinstance(v,str) or len(v)>MAX_ANSWER_LENGTH for k,v in imported.items()):
                     raise ValueError()
+                for group, parts in GROUPS.items():
+                    if group not in imported and any(part in imported for part in parts):
+                        st.session_state.drafts.pop(group,None)
                 st.session_state.drafts.update(imported)
                 # Imported grades are untrusted and are never restored as current scores.
                 for qid in imported:
                     st.session_state.results.pop(qid,None)
                     st.session_state.attempted.discard(qid)
                     st.session_state.pop('input_'+qid,None)
+                for group in GROUPS:
+                    if group in imported or any(part in imported for part in GROUPS[group]):
+                        st.session_state.pop('input_'+group,None)
+                        st.session_state.results.pop(group,None)
                 st.rerun()
             except (ValueError,TypeError,AttributeError):
                 st.error('이 앱에서 저장한 올바른 답안 파일을 선택해 주세요.')
 
 st.title('📚 공통국어2 서논술형 완벽 연습하기 ✌️ with 유빈T💕')
-st.markdown('<div class="practice-note"><strong>2026학년도 2학기 공통국어2 2차 정기시험 대비</strong><br>배부 자료를 읽고 답안을 써 보세요. 2·3·5번은 채점을 눌러 점수와 피드백을 확인할 수 있어요.</div>',unsafe_allow_html=True)
+st.markdown("""<div class="practice-note">
+<strong>2026학년도 2학기 공통국어2 2차 정기시험 서논술형 문항 작성을 연습해 봅시다🔥</strong><br>
+조건에 맞게 답안을 작성하는 연습을 하는 겁니다.<br>
+본 웹은 AI와 함께 제작한 것으로, 채점 내용 등이 명확하지 않을 수 있습니다.<br>
+실제 시험에서는 의미가 통하면 정답으로 인정되나, 본 웹의 채점은 선생님이 입력하지 않은 내용은 오답 처리됩니다.<br>
+<strong>참고용으로만 활용하고, 정확한 내용은 선생님과 수업시간에 한 내용과 선생님께 직접 질문하며 확인하세요!!</strong><br>
+본 웹을 완전히 믿어 잘못된 내용을 학습한 것은 오로지 학습한 학습자의 책임입니다. (수업시간에 이미 작성 방법 및 해당 문제에 대한 모범답안 명확히 안내함!)<br><br>
+** 1번과 4번은 모범답안 및 채점기준을 공개하지 않으며, 2번, 3번, 5번의 모범답안 및 채점기준만 공개합니다.
+</div>""",unsafe_allow_html=True)
 
 def render_result(result):
     st.markdown(f"**점수 {result['earned']:g} / {result['max_score']:g}점**")
@@ -712,92 +835,113 @@ def render_result(result):
     for note in result['format_notes']:
         st.caption('작성 형식 · '+note)
 
-tabs = st.tabs(list(SECTIONS.values()))
+def plain_prompt(text):
+    st.markdown(f"<p>{escape(text).replace('~', '&#126;')}</p>", unsafe_allow_html=True)
+
+def show_prompt(item_id):
+    question = ITEMS[item_id]
+    if item_id == '2-1':
+        plain_prompt(Q21_PROMPT)
+        st.info('읽기 목적 · '+READING_PURPOSE)
+        for mark, part in zip(MARKS[item_id], GROUPS[item_id]):
+            st.write(f'{mark} {QUESTIONS[part].prompt}')
+    elif item_id == '3':
+        plain_prompt(Q3_PROMPT)
+        for mark, part in zip(MARKS[item_id], GROUPS[item_id]):
+            st.write(f'{mark} {QUESTIONS[part].context}')
+    elif item_id == '5-1':
+        st.write(Q51_PROMPT)
+    elif item_id == '5-3':
+        st.write(Q53_PROMPT)
+    else:
+        st.write(question.prompt)
+        if question.context:
+            st.markdown(question.context)
+
+def placeholder_for(item_id):
+    if item_id in MARKS:
+        return '\n'.join(f'{mark}:' for mark in MARKS[item_id])
+    return '문제에서 요구한 내용을 내 문장으로 써 보세요.'
+
+tabs = st.tabs([*SECTIONS.values(), '📘 복습 노트'])
 for section, tab in zip(SECTIONS, tabs):
     with tab:
         st.subheader(SECTIONS[section])
-        summary = st.empty() if section in ('2','3','5') else None
-        st.write(SECTION_INTRO[section])
-
-        if section in ('1','4'):
-            st.info('이 문항은 답안 작성만 연습합니다. 채점기준·모범답안·자동 채점은 제공하지 않습니다.')
-            if section=='4':
-                st.caption('광문의 두 발언은 수업 자료를 참고하세요. 첫 번째와 두 번째 발언을 구분하여 적어 주세요.')
-        else:
-            st.caption('점수는 연습 자료 기준입니다. 3번은 8점, 5번은 18점이며 실제 시험 배점과 다를 수 있습니다.')
-            st.caption('기본 채점은 등록된 표현을 확인해요. 표현이 달라 판단하기 어려우면 확인 필요로 표시합니다.')
-
-        if section=='2':
-            st.markdown('**2-1. 읽기 목적에 맞는 정보 찾기**')
-            st.write(Q21_PROMPT)
-            st.info('읽기 목적 · '+READING_PURPOSE)
-        elif section=='3':
-            st.write(Q3_PROMPT)
-        elif section=='5':
-            with st.expander('5번 〈보기〉 펼쳐 보기',expanded=True):
+        if section == '4':
+            st.caption('광문의 두 발언은 수업 자료를 참고하세요.')
+        if section == '5':
+            with st.expander('5번 〈보기〉 펼쳐 보기', expanded=True):
                 st.markdown(Q5_CONTEXT)
-            st.caption('옛한글 입력이 어려우면 보기의 글자를 복사하여 사용할 수 있습니다.')
-
-        for q in [q for q in QUESTIONS.values() if q.section==section]:
+        section_items = [item_id for item_id,q in ITEMS.items() if q.section == section]
+        summary = st.empty()
+        for item_id in section_items:
+            q = ITEMS[item_id]
             with st.container(border=True):
-                if q.graded:
-                    st.markdown('#### '+q.label)
-                if q.id.startswith('5-3-'):
-                    if q.id=='5-3-a':
-                        st.write(Q53_PROMPT)
-                    st.write('현대어 형태, 음운 변화의 명칭과 변화 내용을 서술하세요.')
-                else:
-                    st.write(q.prompt)
-                if q.context:
-                    st.markdown(q.context)
-                widget_key='input_'+q.id
+                if item_id not in ('1','3','4'):
+                    st.markdown('#### '+item_title(item_id))
+                show_prompt(item_id)
+                if item_id in MARKS:
+                    st.caption('한 답안란에서 항목 앞에 아래 예시처럼 구분 표시를 붙여 주세요.')
+                widget_key = 'input_'+item_id
                 if widget_key not in st.session_state:
-                    st.session_state[widget_key]=st.session_state.drafts.get(q.id,'')
-                answer=st.text_area('나의 답안',key=widget_key,height=230 if q.id in ('1','2-2','5-2','5-4') else 140,
-                    max_chars=MAX_ANSWER_LENGTH,on_change=remember,args=(q.id,),placeholder='문제에서 요구한 내용을 내 문장으로 써 보세요.')
-                st.session_state.drafts[q.id]=answer
+                    st.session_state[widget_key] = draft_for(item_id)
+                answer = st.text_area('나의 답안', key=widget_key, height=220 if item_id in GROUPS else 150,
+                    max_chars=MAX_ANSWER_LENGTH, on_change=remember, args=(item_id,), placeholder=placeholder_for(item_id))
+                st.session_state.drafts[item_id] = answer
                 if not q.graded:
-                    if st.button('답안 저장',key='save_'+q.id):
-                        st.success('현재 접속 중인 연습실에 저장했어요. 창을 닫기 전에는 왼쪽에서 답안을 내려받아 주세요.')
+                    if st.button('답안 저장', key='save_'+item_id):
+                        st.success('답안을 저장했어요. 창을 닫기 전에는 왼쪽에서 내려받아 주세요.')
                     continue
-                if st.button('채점하기',key='grade_'+q.id,type='primary'):
+                if st.button('채점하기', key='grade_'+item_id, type='primary'):
                     if not answer.strip():
                         st.warning('답안을 먼저 입력해 주세요.')
                     else:
-                        st.session_state.attempted.add(q.id)
-                        if use_ai:
-                            try:
-                                with st.spinner('답안의 의미를 확인하고 있어요…'):
-                                    st.session_state.results[q.id]=grade(q,answer,OpenAIBackend(key,model))
-                            except GradingError as exc:
-                                st.warning(str(exc) + ' 기본 채점 결과를 표시합니다.')
-                                st.session_state.results[q.id]=grade_local(q,answer)
-                        else:
-                            st.session_state.results[q.id]=grade_local(q,answer)
-                result=current_result(q.id)
+                        result = assess_item(item_id,answer)
+                        st.session_state.results[item_id] = result
+                        if result['earned'] < result['max_score']:
+                            st.session_state.review_note[item_id] = {'original':result, 'retry':None}
+                            st.session_state.pop('retry_'+item_id,None)
+                        elif item_id in st.session_state.review_note:
+                            st.session_state.review_note[item_id]['retry'] = result
+                result = current_result(item_id)
                 if result:
                     render_result(result)
-                elif q.id in st.session_state.results:
-                    st.caption('답안이 수정되었습니다. 이전 점수는 현재 답안에 적용하지 않습니다. 다시 채점해 주세요.')
-                examples_allowed=q.id in st.session_state.attempted
-                if examples_allowed and flag('SHOW_MODEL_ANSWERS',True):
-                    with st.expander('모범답안과 비교하기'):
-                        for label,text in q.examples:
-                            st.markdown('**'+label+'**')
-                            st.write(text)
-                        st.caption('문장을 똑같이 외울 필요는 없어요. 필요한 의미가 담겼는지 비교해 보세요.')
+                    show_examples(item_id)
+                elif item_id in st.session_state.results:
+                    st.caption('답안을 수정했어요. 채점하기를 눌러 새 점수를 확인해 주세요.')
+        results = [result for item_id in section_items if (result := current_result(item_id))]
+        if results and section != '3':
+            maximum = sum(QUESTIONS[part].max_score for item_id in section_items for part in GROUPS.get(item_id,(item_id,)))
+            summary.info(f"문항 합계 {sum(result['earned'] for result in results):g} / {maximum:g}점 · 채점 {len(results)}/{len(section_items)}개")
 
-        if summary is not None:
-            section_questions = [q for q in QUESTIONS.values() if q.section == section]
-            results = [result for q in section_questions if (result := current_result(q.id))]
-            if results:
-                earned = sum(result['earned'] for result in results)
-                maximum = sum(q.max_score for q in section_questions)
-                pending = sum(result['pending'] for result in results)
-                details = f"채점 {len(results)}/{len(section_questions)}개"
-                if pending:
-                    details += f" · 확인 필요 {pending:g}점"
-                summary.info(f"문항 합계 {earned:g} / {maximum:g}점 · {details}")
+with tabs[-1]:
+    st.subheader('📘 복습 노트')
+    st.caption('틀린 부분, 빠진 부분, 확인이 필요한 부분을 모아 다시 풀 수 있어요.')
+    if not st.session_state.review_note:
+        st.info('채점 후 복습할 답안이 여기에 모여요.')
+    for item_id, entry in st.session_state.review_note.items():
+        retry = entry['retry']
+        solved = retry is not None and retry['earned'] == retry['max_score']
+        label = '다시 풀기 완료' if solved else '다시 풀기'
+        with st.expander(f'{item_title(item_id)} · {label}', expanded=not solved):
+            if ITEMS[item_id].section == '5':
+                with st.expander('5번 〈보기〉'):
+                    st.markdown(Q5_CONTEXT)
+            show_prompt(item_id)
+            st.markdown('**이전 답안**')
+            st.text(entry['original']['answer'])
+            render_result(entry['original'])
+            retry_answer = st.text_area('다시 쓴 답안', key='retry_'+item_id,
+                height=180, max_chars=MAX_ANSWER_LENGTH, placeholder=placeholder_for(item_id))
+            if st.button('다시 채점하기', key='regrade_'+item_id, type='primary'):
+                if retry_answer.strip():
+                    entry['retry'] = assess_item(item_id, retry_answer)
+                    st.rerun()
+                else:
+                    st.warning('다시 쓴 답안을 입력해 주세요.')
+            if retry and retry['answer'] == retry_answer:
+                render_result(retry)
+                show_examples(item_id)
 
 st.divider()
-st.caption('답안은 현재 접속 세션에만 보관됩니다. 내려받은 파일로 다음에 이어 쓸 수 있습니다.')
+st.caption('답안과 복습 노트는 현재 접속 세션에 보관됩니다. 답안은 내려받아 이어 쓸 수 있어요.')
