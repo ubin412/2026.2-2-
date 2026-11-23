@@ -3,14 +3,14 @@
 # 설치: python -m pip install streamlit==1.67.0 openai==2.54.0 "pydantic>=2.10,<3"
 # 실행: python -m streamlit run korean_writing_practice.py
 # AI 채점: 환경변수 OPENAI_API_KEY 또는 .streamlit/secrets.toml에 운영자 키 설정
-# 키가 없어도 문제 열람, 답안 작성·저장, 모범답안 비교가 가능합니다.
+# 기본 채점은 API 키 없이 실행됩니다.
 # 1·4번에는 자동 채점과 모범답안이 없습니다.
 from __future__ import annotations
 
 # ---------- questions.py ----------
 from dataclasses import dataclass, field, asdict
 
-RUBRIC_VERSION = '2026-11-23.1'
+RUBRIC_VERSION = '2026-11-23.2'
 
 @dataclass(frozen=True)
 class Criterion:
@@ -235,7 +235,7 @@ add(Question('5-4','5','5-4 · 근거를 들어 반박하기',
  ('용어 없이 쓴 답안','세종이 자기 업적을 남기려고 글자를 만들었다는 생각은 적절하지 않다. 백성들은 우리말을 적기 불편한 기존 문자 때문에 글을 이해하거나 뜻을 글로 전하기 어려웠다. 세종은 이 불편을 안타깝게 여겨 백성 누구나 쉽게 배우고 쓸 수 있는 글자를 만들어 자신의 뜻을 표현하고 생활에 활용하도록 돕고자 했다.')),
  context=Q54_CONTEXT))
 
-SECTIONS = {'1':'01 · 좋은 삶', '2':'02 · 친구와 읽기', '3':'03 · 주제 통합적 읽기', '4':'04 · 광문의 가치관', '5':'05 · 중세 국어'}
+SECTIONS = {str(n): f'서논술형 {n}번' for n in range(1, 6)}
 SECTION_INTRO = {'1':'읽고 생각한 내용을 하나의 글로 연결해 보세요.',
  '2':'읽기 목적에 맞는 정보를 찾고, 글의 관점으로 생각을 보완해 보세요.',
  '3':'소감에 드러난 읽기의 효과를 각각 한 문장으로 표현해 보세요.',
@@ -471,23 +471,139 @@ def grade(question: Question, answer: str, backend: Backend):
             'method':'AI 의미 채점 및 독립 재검증'}
 
 
+# Each row lists the required signals in one clause or sentence.
+LOCAL_RULES = {
+ ('2-1-a','effort'): (r'넉넉하지|가난|여유가없|형편이(?:어렵|어려)', r'책|재산|자기것', r'내어|내놓|보태|팔아|처분', r'서재', r'재료|물자', r'일꾼|인력'),
+ ('2-1-b','joy'): (r'친구', r'성공|행복|성장|잘되|잘되는|좋은일', r'함께기뻐|같이기뻐|내일처럼.*기뻐|같이즐거워'),
+ ('2-1-c','memory'): (r'친구|사람', r'관계|친구를유지', r'기억|저장|잊지않', r'정보|주고받'),
+ ('2-2','common'): (r'두글|모두|가와나', r'친구', r'어려|힘들|힘든', r'도움|돕|위로|격려|힘이되|도와|힘을주'),
+ ('2-2','basis'): (r'주고받|받고준', r'기억|잊지않', r'관계', r'노력|이어가|이어나가|지속|유지'),
+ ('2-2','conclusion'): (r'도움|돕|도우|도와', r'마음', r'뿐아니라|뿐만아니라|만으로는부족|만으로는충분하지|만으로는.*어렵', r'관계', r'노력'),
+ ('3-a','effect'): (r'깊이|깊게|깊은|심층', r'균형|여러측면|여러관점|폭넓|존중.*성장', r'이해'),
+ ('3-b','effect'): (r'다양|풍부|서로다른|여러방식', r'독서|글을읽|주제를접|주제를.*접'),
+ ('3-c','effect'): (r'비판적|따져|의문|옳은지', r'창의적|새로운관점|대안'),
+ ('3-d','effect'): (r'통합|종합|연결|묶어', r'재구성|새로운정의|나만의정의|자기.*생각.*구성'),
+ ('5-1-a','old'): (r'중세|옛날|과거|당시', r'가엾|가엽|불쌍|딱하'),
+ ('5-1-a','modern'): (r'현대|오늘날|지금', r'예쁘|아름답'),
+ ('5-1-a','definition'): (r'다른(?:뜻|의미).*(?:바뀌|변)|(?:가엾|불쌍).*에서.*예쁘.*(?:바뀌|변)',),
+ ('5-1-b','old'): (r'중세|옛날|과거|당시', r'형체|모습|전체적인생김새'),
+ ('5-1-b','modern'): (r'현대|오늘날|지금', r'머리(?:의)?앞(?:면|부분)|눈코입이있는'),
+ ('5-1-b','definition'): (r'범위.*(?:좁아|줄어)|(?:형체|전체).*에서.*앞(?:면|부분).*(?:한정|바뀌|변)',),
+ ('5-2','yeon_term'): (r'ᄉᆡ미',r'이어적기|연철'),
+ ('5-2','bun_term'): (r'샘이',r'끊어적기|분철'),
+ ('5-2','yeon_def'): (r'받침|끝소리',r'초성|첫소리',r'옮겨(?:적|쓰|쓴)'),
+ ('5-2','bun_def'): (r'형태소|원래형태|샘과이',r'구분|유지|밝혀|남겨',r'적|쓰|쓴'),
+ ('5-3-a','change'): (r'첫머리|어두|맨앞|말첫|^니에서',r'ㅣ|니',r'ㄴ.*(?:탈락|없어|사라)'),
+ ('5-3-b','change'): (r'반모음|\[j\]|ㅛ',r'ㄷ(?:이|은)?(?:→|에서)?ㅈ'),
+ ('5-3-c','change'): (r'ㅁ(?:뒤|의영향)|입술소리.*ㅁ',r'ㅡ(?:가|는)?(?:→|에서)?ㅜ'),
+ ('5-4','target'): (r'업적|공적|명예',r'적절하지않|옳지않|아니|틀렸|잘못'),
+ ('5-4','difficulty'): (r'한자|이두|기존문자',r'뜻|의사|글',r'표현|이해|전하',r'어렵|어려|불편|못'),
+ ('5-4','attitude'): (r'백성|불편|어려움',r'안타깝|가엾|불쌍|배려|사랑'),
+ ('5-4','purpose'): (r'쉽게|쉬운|손쉽게',r'글자|문자|훈민정음',r'표현|전하|해결|소통|활용'),
+}
+
+LOCAL_ERRORS = {
+ ('2-1-a','effort'): r'돈이(?:아주)?많아서|부유했기때문',
+ ('2-1-b','joy'): r'함께기뻐하지않|같이기뻐하지않|질투한다|시기한다|함께슬퍼하고위로',
+ ('2-1-c','memory'): r'뇌가커졌기때문에친구가|기억할필요가없',
+ ('2-2','conclusion'): r'마음만있으면.*(?:충분|유지할수있)|마음은필요없',
+ ('5-1-a','old'): r'(?:중세|옛날|과거|당시).*예쁘',
+ ('5-1-a','modern'): r'(?:현대|지금|오늘날).*불쌍',
+ ('5-1-b','old'): r'(?:중세|옛날|과거|당시).*머리(?:의)?앞(?:면|부분)',
+ ('3-a','effect'): r'독서경험|비판적.*창의적|지식재구성',
+ ('3-b','effect'): r'독서속도|같은글을여러번',
+ ('3-c','effect'): r'무조건비난(?:한다|하는)|비난하는능력',
+ ('3-d','effect'): r'따로(?:외우|요약)|그대로베끼',
+ ('5-1-a','term'): r'의미(?:의)?(?:축소|확대)',
+ ('5-1-b','term'): r'의미(?:의)?(?:이동|확대)',
+ ('5-1-b','definition'): r'범위.*넓어',
+ ('5-2','yeon_term'): r'ᄉᆡ미(?:는|에|에는|의표기는)?.{0,12}(?:분철|끊어적기)',
+ ('5-2','bun_term'): r'샘이(?:는|에|에는|의표기는)?.{0,12}(?:연철|이어적기)',
+ ('5-2','yeon_def'): r'ᄉᆡ미.{0,40}옮겨적지않',
+ ('5-2','bun_def'): r'샘이.{0,40}옮겨(?:적는다|쓴다)',
+ ('5-2','example'): r'(?:기픈|므른|ᄇᆞᄅᆞ매).{0,10}(?:분철|끊어적기)',
+ ('5-3-a','change'): r'ㄴ(?:이|은)?(?:→)?ㄹ|ㅣ(?:가|는)탈락',
+ ('5-3-b','change'): r'ㅌ(?:이|은)?(?:→)?ㅊ|ㄷ(?:이|은)탈락',
+ ('5-3-c','change'): r'ㅜ(?:가|는)?(?:→)?ㅡ|ㅡ(?:가|는)?(?:→)?ㅗ',
+ ('5-4','target'): r'학생의생각은옳다|업적을남기(?:려고|위해).*창제했다$',
+}
+
+def rule_text(value):
+    return re.sub(r'[^\w→\[\]]', '', compact(value))
+
+def grade_local(question, answer):
+    sentences = [p.strip() for p in re.split(r'(?<=[.!?。])\s*|\n+', answer) if p.strip()]
+    pieces = [clause.strip() for sentence in sentences for clause in re.split(r',|;|으나|지만', sentence) if clause.strip()]
+    exact = any(rule_text(answer) == rule_text(example) for _, example in question.examples)
+    rows = []
+    for criterion in question.criteria:
+        key = (question.id, criterion.id)
+        pattern = LOCAL_ERRORS.get(key)
+        pools = pieces if question.id.startswith('5-1') and criterion.id in ('old','modern') else sentences
+        if question.id == '5-4' and criterion.id == 'target':
+            pools = sentences + [' '.join(sentences[i:i+2]) for i in range(len(sentences)-1)]
+        wrong = next((p for p in pools if pattern and re.search(pattern, rule_text(p).rstrip('.')) and not re.search(r'아니|아니다|않다$|않는다$', rule_text(p)) ), '')
+        if key in (('2-1-b','joy'), ('2-1-c','memory'), ('5-2','yeon_def')):
+            wrong = next((p for p in pools if pattern and re.search(pattern,rule_text(p))), '')
+        signals = LOCAL_RULES.get(key)
+        match = next((p for p in pools if signals and all(re.search(signal, rule_text(p)) for signal in signals)), '')
+        if criterion.kind == 'example' or (criterion.terms and not signals):
+            match = next((p for p in pools if any(re.search(r'(?<![가-힣])'+re.escape(term)+r'(?![가-힣])',normalize(p)) if criterion.kind=='form' else rule_text(term) in rule_text(p) for term in criterion.terms)), '')
+            if criterion.kind=='form' and not match:
+                match=next((p for p in pools if any(re.search(r'(?<![가-힣])'+re.escape(term)+r'(?:이다|입니다|가|으로|로|을|은)(?![가-힣])',normalize(p)) for term in criterion.terms)), '')
+        if key == ('5-2','yeon_def'):
+            match = next((p for p in pools if all(re.search(s,rule_text(p)) for s in signals) and not re.search(r'옮겨(?:적|쓰)지않',rule_text(p)) and ('샘이' not in p or 'ᄉᆡ미' in normalize(p))), '')
+        if key == ('5-2','bun_def') and match and ('연철' in match or '이어 적기' in match) and '샘이' not in match:
+            match=''
+        if match and re.search(r'(?:기뻐|이해|바뀌|변하|탈락하)(?:지않|지못)|(?:아니라|또는).*(?:확대|축소|이동)',rule_text(match)) and key not in (('2-1-b','joy'),('2-2','conclusion')):
+            match=''
+        if match and criterion.terms:
+            terms = '|'.join(re.escape(rule_text(term)) for term in criterion.terms)
+            if re.search(rf'(?:{terms})(?:이|가|은|는)?(?:아니|아닙|아님)', rule_text(match)):
+                match = ''
+        status, evidence = 'review', []
+        feedback = '표현을 자동으로 판단하기 어려워요. 아래 기준과 비교해 보세요.'
+        if wrong and not exact:
+            status, evidence, feedback = 'wrong', [wrong], '이 부분의 개념이나 설명 방향을 다시 확인해 보세요.'
+        elif exact or match:
+            status, evidence, feedback = 'pass', [match or answer], '이 채점 요소를 충족했어요.'
+        elif criterion.kind in ('form','term') and criterion.terms and not any(rule_text(t) in rule_text(answer) for t in criterion.terms):
+            status, feedback = 'missing', '요구한 형태나 명칭을 답안에서 찾지 못했어요.'
+        rows.append(dict(id=criterion.id,label=criterion.label,points=criterion.points,status=status,
+                         evidence=evidence,feedback=feedback,required=criterion.required))
+    earned = sum(row['points'] for row in rows if row['status']=='pass')
+    pending = sum(row['points'] for row in rows if row['status']=='review')
+    return dict(question_id=question.id,answer=answer,rubric_version=RUBRIC_VERSION,
+                overall='pass' if earned==question.max_score else 'review' if pending else 'revise',
+                earned=earned,pending=pending,max_score=question.max_score,checks=rows,
+                format_notes=[],method='기본 채점')
+
+
 # ---------- app.py ----------
 import json
 import os
-import time
+from html import escape
 from datetime import datetime
 import streamlit as st
 
-st.set_page_config(page_title='유빈샘의 서논술형 연습실',page_icon='✍️',layout='centered')
+st.set_page_config(page_title='유빈샘의 서논술형 연습실',page_icon='✍️',layout='wide')
 st.markdown('''<style>
-.stApp {background:#f8f7f3; color:#23364b;}
-.block-container {max-width:940px; padding-top:2.6rem; padding-bottom:4rem;}
+.stApp {background:#fff; color:#25252b;}
+.block-container {max-width:1260px; padding-top:2.6rem; padding-bottom:4rem;}
 [data-testid="stSidebar"] {background:#eaf0f3;}
 h1,h2,h3 {letter-spacing:-.035em;}
 [data-testid="stTextArea"] textarea {line-height:1.9; background:#fff; font-size:16px;}
 [data-testid="stVerticalBlockBorderWrapper"] {background:#fff;}
 .eyebrow {font-size:12px;letter-spacing:.12em;color:#567284;font-weight:700;margin-bottom:10px;}
-.hero {border-bottom:2px solid #284b63;padding-bottom:20px;margin-bottom:26px;}
+.practice-note {background:#ffe7e6;color:#4a3031;padding:16px 20px;border-radius:10px;margin-bottom:16px;}
+.grade-row {padding:10px 14px;margin:6px 0;border-radius:8px;overflow-wrap:anywhere;color:#262626;}
+.grade-pass {background:#e6f5eb;border-left:4px solid #257744;}
+.grade-wrong,.grade-missing {background:#ffebeb;border-left:4px solid #a62635;}
+.grade-review {background:#fff3d9;border-left:4px solid #9a6500;}
+.grade-evidence {margin-top:5px;white-space:pre-wrap;}
+.grade-pass .grade-evidence {color:#185e33;}
+.grade-wrong .grade-evidence {color:#a21c2c;}
+.grade-review .grade-evidence {color:#775000;}
 .hero h1 {font-size:2rem;margin:0 0 8px;}
 .hero p {font-size:15px;color:#637280;margin-bottom:0;}
 </style>''',unsafe_allow_html=True)
@@ -508,7 +624,6 @@ if 'drafts' not in st.session_state:
     st.session_state.drafts={}
     st.session_state.results={}
     st.session_state.attempted=set()
-    st.session_state.next_grade_at=0.0
 
 def remember(qid):
     st.session_state.drafts[qid]=st.session_state['input_'+qid]
@@ -543,7 +658,9 @@ available=bool(key and key!='YOUR_API_KEY')
 with st.sidebar:
     st.markdown('### ✍️ 서논술형 연습실')
     st.caption('공통국어2 · 2차 정기시험 대비')
-    section=st.radio('연습할 문항',list(SECTIONS),format_func=lambda x:SECTIONS[x],key='section')
+    use_ai = st.checkbox('AI 의미 채점 사용', value=False) if available else False
+    if use_ai:
+        st.caption('채점을 누르면 답안이 AI 서비스로 전송됩니다. 이름과 학번은 입력하지 마세요.')
     done=sum(bool(st.session_state.drafts.get(q.id,'').strip()) for q in QUESTIONS.values())
     st.divider()
     st.caption(f'답안을 쓴 칸 {done} / {len(QUESTIONS)}')
@@ -574,104 +691,113 @@ with st.sidebar:
             except (ValueError,TypeError,AttributeError):
                 st.error('이 앱에서 저장한 올바른 답안 파일을 선택해 주세요.')
 
-st.markdown('''<div class="hero"><div class="eyebrow">유빈샘과 함께하는 따뜻한 국어 수업</div>
-<h1>생각을 문장으로, 한 번 더.</h1>
-<p>답안을 쓰고, 필요한 내용을 확인하고, 내 문장으로 다시 다듬어 보세요.</p></div>''',unsafe_allow_html=True)
-st.caption('1번은 시험문제와 동일하며, 나머지는 유형이 같고 세부 내용은 다릅니다. 읽기 지문은 배부한 종이 자료를 참고하세요.')
-st.subheader(SECTIONS[section])
-st.write(SECTION_INTRO[section])
-
-if section in ('1','4'):
-    st.info('이 문항은 답안 작성만 연습합니다. 채점기준·모범답안·자동 채점은 제공하지 않습니다.')
-    if section=='4':
-        st.caption('광문의 두 발언은 수업 자료를 참고하세요. 첫 번째와 두 번째 발언을 구분하여 적어 주세요.')
-else:
-    st.caption('점수는 연습 자료 기준입니다. 3번은 8점, 5번은 18점이며 실제 시험 배점과 다를 수 있습니다.')
-    if not available:
-        st.info('자동 채점 연결을 준비 중입니다. 지금도 답안을 작성하고 저장할 수 있습니다.')
-    else:
-        st.caption('채점 버튼을 누르면 작성한 답안이 AI 채점 서비스로 전송됩니다. 이름·학번은 입력하지 마세요. 판정이 애매하면 선생님과 확인하세요.')
-
-if section=='2':
-    st.markdown('**2-1. 읽기 목적에 맞는 정보 찾기**')
-    st.write(Q21_PROMPT)
-    st.info('읽기 목적 · '+READING_PURPOSE)
-elif section=='3':
-    st.write(Q3_PROMPT)
-elif section=='5':
-    with st.expander('5번 〈보기〉 펼쳐 보기',expanded=True):
-        st.markdown(Q5_CONTEXT)
-    st.caption('옛한글 입력이 어려우면 보기의 글자를 복사하여 사용할 수 있습니다.')
+st.title('📚 공통국어2 서논술형 완벽 연습하기 ✌️ with 유빈T💕')
+st.markdown('<div class="practice-note"><strong>2026학년도 2학기 공통국어2 2차 정기시험 대비</strong><br>배부 자료를 읽고 답안을 써 보세요. 2·3·5번은 채점을 눌러 점수와 피드백을 확인할 수 있어요.</div>',unsafe_allow_html=True)
 
 def render_result(result):
-    if result['overall']=='pass':
-        st.success(f"필수 요소를 모두 충족했어요. {result['earned']:g} / {result['max_score']:g}점")
-    elif result['overall']=='review':
-        st.warning(f"선생님과 확인할 부분이 있어요. 확인된 점수 {result['earned']:g} / {result['max_score']:g}점 · 판정 대기 {result['pending']:g}점")
-    else:
-        st.info(f"답안을 조금 더 다듬어 보세요. {result['earned']:g} / {result['max_score']:g}점")
+    st.markdown(f"**점수 {result['earned']:g} / {result['max_score']:g}점**")
+    if result['pending']:
+        st.caption(f"확인 필요 {result['pending']:g}점 · 위 점수는 확인된 점수입니다.")
     for row in result['checks']:
-        icon={'pass':'✓','missing':'＋','wrong':'!','review':'?'}[row['status']]
-        with st.expander(f"{icon} {row['label']} · {LABELS[row['status']]} ({row['points']:g}점)",expanded=row['status']!='pass'):
-            st.write(row['feedback'])
-            if row['evidence']:
-                st.caption('내 답안에서 확인한 부분')
-                for text in row['evidence']:
-                    st.text(text)
+        status = row['status']
+        mark = {'pass':'✓','missing':'＋','wrong':'✗','review':'?'}[status]
+        points = f"{row['points']:g}" if status == 'pass' else '–' if status == 'review' else '0'
+        title = escape(f"{mark} {row['label']} · {LABELS[status]} · {points} / {row['points']:g}점")
+        feedback = escape(row['feedback'])
+        quote = '<br>'.join(escape(value) for value in row['evidence'])
+        evidence_html = f'<div class="grade-evidence">{quote}</div>' if quote else ''
+        required = escape(' · '.join(row.get('required', ())))
+        criteria_html = f'<div>확인할 기준 · {required}</div>' if required and status != 'pass' else ''
+        st.markdown(f'<div class="grade-row grade-{status}"><strong>{title}</strong><div>{feedback}</div>{evidence_html}{criteria_html}</div>', unsafe_allow_html=True)
     for note in result['format_notes']:
-        st.caption('작성 형식: '+note)
+        st.caption('작성 형식 · '+note)
 
-for q in [q for q in QUESTIONS.values() if q.section==section]:
-    with st.container(border=True):
-        st.markdown('#### '+q.label)
-        if q.id.startswith('5-3-'):
-            if q.id=='5-3-a':
-                st.write(Q53_PROMPT)
-            st.write('현대어 형태, 음운 변화의 명칭과 변화 내용을 서술하세요.')
+tabs = st.tabs(list(SECTIONS.values()))
+for section, tab in zip(SECTIONS, tabs):
+    with tab:
+        st.subheader(SECTIONS[section])
+        summary = st.empty() if section in ('2','3','5') else None
+        st.write(SECTION_INTRO[section])
+
+        if section in ('1','4'):
+            st.info('이 문항은 답안 작성만 연습합니다. 채점기준·모범답안·자동 채점은 제공하지 않습니다.')
+            if section=='4':
+                st.caption('광문의 두 발언은 수업 자료를 참고하세요. 첫 번째와 두 번째 발언을 구분하여 적어 주세요.')
         else:
-            st.write(q.prompt)
-        if q.context:
-            st.markdown(q.context)
-        widget_key='input_'+q.id
-        if widget_key not in st.session_state:
-            st.session_state[widget_key]=st.session_state.drafts.get(q.id,'')
-        answer=st.text_area('나의 답안',key=widget_key,height=230 if q.id in ('1','2-2','5-2','5-4') else 140,
-            max_chars=MAX_ANSWER_LENGTH,on_change=remember,args=(q.id,),placeholder='문제에서 요구한 내용을 내 문장으로 써 보세요.')
-        st.session_state.drafts[q.id]=answer
-        if not q.graded:
-            if st.button('답안 저장',key='save_'+q.id):
-                st.success('현재 접속 중인 연습실에 저장했어요. 창을 닫기 전에는 왼쪽에서 답안을 내려받아 주세요.')
-            continue
-        if st.button('답안 채점하기',key='grade_'+q.id,type='primary',disabled=not available or not answer.strip()):
-            if time.monotonic()<st.session_state.next_grade_at:
-                st.warning('잠시 뒤 다시 채점해 주세요.')
-            else:
-                st.session_state.attempted.add(q.id)
-                existing=current_result(q.id)
-                if existing and existing['rubric_version']==RUBRIC_VERSION:
-                    st.caption('같은 답안의 최근 채점 결과입니다. 수정한 뒤 다시 확인해 보세요.')
+            st.caption('점수는 연습 자료 기준입니다. 3번은 8점, 5번은 18점이며 실제 시험 배점과 다를 수 있습니다.')
+            st.caption('기본 채점은 등록된 표현을 확인해요. 표현이 달라 판단하기 어려우면 확인 필요로 표시합니다.')
+
+        if section=='2':
+            st.markdown('**2-1. 읽기 목적에 맞는 정보 찾기**')
+            st.write(Q21_PROMPT)
+            st.info('읽기 목적 · '+READING_PURPOSE)
+        elif section=='3':
+            st.write(Q3_PROMPT)
+        elif section=='5':
+            with st.expander('5번 〈보기〉 펼쳐 보기',expanded=True):
+                st.markdown(Q5_CONTEXT)
+            st.caption('옛한글 입력이 어려우면 보기의 글자를 복사하여 사용할 수 있습니다.')
+
+        for q in [q for q in QUESTIONS.values() if q.section==section]:
+            with st.container(border=True):
+                if q.graded:
+                    st.markdown('#### '+q.label)
+                if q.id.startswith('5-3-'):
+                    if q.id=='5-3-a':
+                        st.write(Q53_PROMPT)
+                    st.write('현대어 형태, 음운 변화의 명칭과 변화 내용을 서술하세요.')
                 else:
-                    try:
-                        with st.spinner('답안의 의미와 논리 방향을 확인하고 있어요…'):
-                            result=grade(q,answer,OpenAIBackend(key,model))
-                        st.session_state.results[q.id]=result
-                    except GradingError as exc:
-                        st.error(str(exc))
-                    finally:
-                        st.session_state.next_grade_at=time.monotonic()+3
-        result=current_result(q.id)
-        if result:
-            render_result(result)
-        elif q.id in st.session_state.results:
-            st.caption('답안이 수정되었습니다. 이전 점수는 현재 답안에 적용하지 않습니다. 다시 채점해 주세요.')
-        # No API key: answer writing counts as an attempt so examples remain useful offline.
-        examples_allowed=q.id in st.session_state.attempted or (not available and bool(answer.strip()))
-        if examples_allowed and flag('SHOW_MODEL_ANSWERS',True):
-            with st.expander('모범답안과 비교하기'):
-                for label,text in q.examples:
-                    st.markdown('**'+label+'**')
-                    st.write(text)
-                st.caption('문장을 똑같이 외울 필요는 없어요. 필요한 의미가 담겼는지 비교해 보세요.')
+                    st.write(q.prompt)
+                if q.context:
+                    st.markdown(q.context)
+                widget_key='input_'+q.id
+                if widget_key not in st.session_state:
+                    st.session_state[widget_key]=st.session_state.drafts.get(q.id,'')
+                answer=st.text_area('나의 답안',key=widget_key,height=230 if q.id in ('1','2-2','5-2','5-4') else 140,
+                    max_chars=MAX_ANSWER_LENGTH,on_change=remember,args=(q.id,),placeholder='문제에서 요구한 내용을 내 문장으로 써 보세요.')
+                st.session_state.drafts[q.id]=answer
+                if not q.graded:
+                    if st.button('답안 저장',key='save_'+q.id):
+                        st.success('현재 접속 중인 연습실에 저장했어요. 창을 닫기 전에는 왼쪽에서 답안을 내려받아 주세요.')
+                    continue
+                if st.button('채점하기',key='grade_'+q.id,type='primary'):
+                    if not answer.strip():
+                        st.warning('답안을 먼저 입력해 주세요.')
+                    else:
+                        st.session_state.attempted.add(q.id)
+                        if use_ai:
+                            try:
+                                with st.spinner('답안의 의미를 확인하고 있어요…'):
+                                    st.session_state.results[q.id]=grade(q,answer,OpenAIBackend(key,model))
+                            except GradingError as exc:
+                                st.warning(str(exc) + ' 기본 채점 결과를 표시합니다.')
+                                st.session_state.results[q.id]=grade_local(q,answer)
+                        else:
+                            st.session_state.results[q.id]=grade_local(q,answer)
+                result=current_result(q.id)
+                if result:
+                    render_result(result)
+                elif q.id in st.session_state.results:
+                    st.caption('답안이 수정되었습니다. 이전 점수는 현재 답안에 적용하지 않습니다. 다시 채점해 주세요.')
+                examples_allowed=q.id in st.session_state.attempted
+                if examples_allowed and flag('SHOW_MODEL_ANSWERS',True):
+                    with st.expander('모범답안과 비교하기'):
+                        for label,text in q.examples:
+                            st.markdown('**'+label+'**')
+                            st.write(text)
+                        st.caption('문장을 똑같이 외울 필요는 없어요. 필요한 의미가 담겼는지 비교해 보세요.')
+
+        if summary is not None:
+            section_questions = [q for q in QUESTIONS.values() if q.section == section]
+            results = [result for q in section_questions if (result := current_result(q.id))]
+            if results:
+                earned = sum(result['earned'] for result in results)
+                maximum = sum(q.max_score for q in section_questions)
+                pending = sum(result['pending'] for result in results)
+                details = f"채점 {len(results)}/{len(section_questions)}개"
+                if pending:
+                    details += f" · 확인 필요 {pending:g}점"
+                summary.info(f"문항 합계 {earned:g} / {maximum:g}점 · {details}")
 
 st.divider()
 st.caption('답안은 현재 접속 세션에만 보관됩니다. 내려받은 파일로 다음에 이어 쓸 수 있습니다.')
