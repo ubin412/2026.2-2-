@@ -609,15 +609,13 @@ st.markdown('''<style>
 .stApp h2 {font-size:34px;}
 .stApp h3 {font-size:30px;}
 .stApp h4 {font-size:26px;}
-.stApp .question-heading {
-    display:grid; grid-template-columns:max-content minmax(0,1fr);
-    gap:0.25em 0.65em; align-items:baseline; margin:0;
-    line-height:1.4; font-weight:700; letter-spacing:normal;
+.question-heading {display:block; width:100%; min-width:0; box-sizing:border-box;}
+.stApp .question-heading :is(h2,h4) {
+    white-space:normal; overflow-wrap:anywhere; margin:0; line-height:1.45;
+    font-weight:700; letter-spacing:normal;
 }
-.question-heading .question-stem {font-size:0.82em; font-weight:inherit; overflow-wrap:anywhere;}
-@media (max-width:600px) {
-    .stApp .question-heading {grid-template-columns:minmax(0,1fr);}
-}
+.question-number {white-space:nowrap;}
+.question-stem {font-size:0.82em; font-weight:inherit; white-space:normal;}
 .block-container {max-width:1260px; padding-top:2.6rem; padding-bottom:4rem;}
 [data-testid="stSidebar"] {background:#eaf0f3;}
 h1,h2,h3 {letter-spacing:-.035em;}
@@ -863,10 +861,12 @@ def render_question_heading(item_id, level):
     }.get(item_id, ITEMS[item_id].prompt)
     stem = escape(prompt).replace('~', '&#126;')
     number = escape(item_title(item_id))
-    st.markdown(
-        f'<h{level} class="question-heading"><span>{number}</span>'
-        f'<span class="question-stem">{stem}</span></h{level}>',
-        unsafe_allow_html=True,
+    st.html(
+        f'<div class="question-heading" style="width:100%;min-width:0;white-space:normal">'
+        f'<h{level} style="white-space:normal;overflow-wrap:anywhere">'
+        f'<span class="question-number">{number}</span>&nbsp;&nbsp;'
+        f'<span class="question-stem" style="white-space:normal">{stem}</span>'
+        f'</h{level}></div>'
     )
 
 def render_question_context(item_id):
