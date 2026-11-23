@@ -10,7 +10,7 @@ from __future__ import annotations
 # ---------- questions.py ----------
 from dataclasses import dataclass, field, asdict
 
-RUBRIC_VERSION = '2026-11-23.3'
+RUBRIC_VERSION = '2026-11-23.4'
 
 @dataclass(frozen=True)
 class Criterion:
@@ -76,8 +76,8 @@ Q21_PROMPT = '다음 읽기 목적에 맞게 (가)~(다)에서 필요한 정보�
 add(Question('2-1-a','2','2-1 ㉠ · 벗들의 노력',
  '(가) 벗들은 ‘나’에게 서재를 지어 주기 위해 어떤 노력을 기울였는가?', (
  C('effort','벗들이 기울인 구체적인 노력',1,
-   ['넉넉하지 않은 형편에도','자신들의 책이나 재산을 내어','서재를 지을 재료와 일꾼을 마련함'],
-   '가난하거나 여유가 없었다는 표현 인정. 아끼던 것을 보태 건립에 필요한 물자와 인력을 마련했다는 의미 인정.',
+   ['넉넉하지 않은 형편에도','자신들의 책이나 재산을 내어','서재를 지을 재료와 일꾼 또는 건립 비용을 마련함'],
+   '가난하거나 여유가 없었다는 표현 인정. 아끼던 것을 보태 건립에 필요한 물자와 인력을 마련하거나 서재를 지을 돈을 마련했다는 의미 인정.',
    '부유했기 때문이라고 설명; 서재를 받는 사람과 돕는 사람을 뒤바꿈; 단순히 도왔다고만 씀'),),
  (('모범답안','벗들은 넉넉하지 않은 형편에도 자신들이 아끼던 책을 비롯한 재산을 내어 서재를 지을 재료와 일꾼을 마련하였다.'),)))
 add(Question('2-1-b','2','2-1 ㉡ · 동락',
@@ -473,7 +473,7 @@ def grade(question: Question, answer: str, backend: Backend):
 
 # Each row lists the required signals in one clause or sentence.
 LOCAL_RULES = {
- ('2-1-a','effort'): (r'넉넉하지|가난|여유가없|형편이(?:어렵|어려)', r'책|재산|자기것', r'내어|내놓|보태|팔아|처분', r'서재', r'재료|물자', r'일꾼|인력'),
+ ('2-1-a','effort'): (r'넉넉하지|가난|여유가없|형편이(?:어렵|어려)', r'책|재산|자기것', r'내어|내놓|보태|팔아|처분', r'서재', r'(?:(?=.*(?:재료|물자))(?=.*(?:일꾼|인력))|(?=.*(?:돈|비용|자금|경비))(?=.*(?:마련|모았|모아|보탰|충당)))'),
  ('2-1-b','joy'): (r'친구', r'성공|행복|성장|잘되|잘되는|좋은일', r'함께기뻐|같이기뻐|내일처럼.*기뻐|같이즐거워'),
  ('2-1-c','memory'): (r'친구|사람', r'관계|친구를유지', r'기억|저장|잊지않', r'정보|주고받'),
  ('2-2','common'): (r'두글|모두|가와나', r'친구', r'어려|힘들|힘든', r'도움|돕|위로|격려|힘이되|도와|힘을주'),
@@ -599,10 +599,20 @@ st.markdown('''<style>
 .stApp, .stApp :is(h1,h2,h3,h4,h5,h6,p,li,th,td,label,button,input,textarea,pre,[role="tab"],.practice-note,.grade-row) {
     font-family: "LeeSeoyun", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif !important;
 }
+/* Increase text sizes by roughly 1–2 points while preserving the heading hierarchy. */
+.stApp {font-size:18px;}
+.stApp :is(p,li,th,td,label,button,input,textarea,pre,[role="tab"],.practice-note,.grade-row) {
+    font-size:18px;
+}
+.stApp [data-testid="stCaptionContainer"] p {font-size:16px;}
+.stApp h1 {font-size:42px;}
+.stApp h2 {font-size:34px;}
+.stApp h3 {font-size:30px;}
+.stApp h4 {font-size:26px;}
 .block-container {max-width:1260px; padding-top:2.6rem; padding-bottom:4rem;}
 [data-testid="stSidebar"] {background:#eaf0f3;}
 h1,h2,h3 {letter-spacing:-.035em;}
-[data-testid="stTextArea"] textarea {line-height:1.9; background:#fff; font-size:16px;}
+[data-testid="stTextArea"] textarea {line-height:1.9; background:#fff; font-size:18px;}
 [data-testid="stVerticalBlockBorderWrapper"] {background:#fff;}
 .eyebrow {font-size:12px;letter-spacing:.12em;color:#567284;font-weight:700;margin-bottom:10px;}
 .practice-note {background:#ffe7e6;color:#4a3031;padding:16px 20px;border-radius:10px;margin-bottom:16px;}
@@ -664,14 +674,16 @@ def split_answer(item_id, answer):
     marks = MARKS[item_id]
     alternatives = '|'.join(map(re.escape, marks))
     if marks[0] == '㉠':
-        pattern = rf'(?:{alternatives})\s*[:：.)]?\s*|(?m:^\s*([ㄱ-ㄹ1-4])[:：.)]\s*)'
+        bare = 'ㄱㄴㄷㄹ'[:len(marks)]
+        numbers = '1234'[:len(marks)]
+        pattern = rf'(?:({alternatives})[ \t]*(?:(?:은|는|이|가)(?=\s|$))?[ \t]*[:：.)、]?[ \t]*|(?<!\S)(?:\(([{bare}])\)|([{bare}])(?:[:：.)、]|(?:은|는|이|가)(?=\s|$)|(?=[ \t]))|([{numbers}])[:：.)])[ \t]*)'
     else:
         pattern = rf'(?:^|(?<=\n)|(?<=\s)|(?<=[.!?]))[‘“"\']?({alternatives})[’”"\']?\s*(?:[:：.)]\s*|(?=은|는|의))'
     matches = list(re.finditer(pattern, answer))
     if matches:
         chunks = {}
         for index, match in enumerate(matches):
-            marker = match.group(1) or match.group().strip()[0]
+            marker = next(value for value in match.groups() if value is not None)
             if marker in 'ㄱㄴㄷㄹ1234':
                 marker = '㉠㉡㉢㉣'['ㄱㄴㄷㄹ'.index(marker) if marker in 'ㄱㄴㄷㄹ' else int(marker)-1]
             end = matches[index+1].start() if index+1 < len(matches) else len(answer)
